@@ -43,11 +43,109 @@ gitlab-auto-reviewer/
 
 There's a simple per-repo-folder queue, so if two webhooks come in at the
 same time for the same repo, the reviews run one after another — not in
-conflict.
+conflict. Repeat triggers for the same MR are deduplicated: if a review for
+that MR is still waiting in the queue, the new trigger is dropped (the
+waiting review will see the latest state anyway); if one is already
+running, the new trigger is queued so a mid-review mention still gets
+answered. Being "assigned as reviewer" only triggers when you're newly
+added, not on every reviewer-list change while you're already on it.
+Only open MRs trigger (merged/closed ones are ignored), and comments
+written by you are ignored too — the bot posts with your token, so
+otherwise a review that mentions you would trigger itself in a loop. To
+run a review manually, assign yourself as reviewer instead.
 
 On startup, the server also runs a **catch-up scan**: it checks the GitLab
 Todos API for any open MR that already assigned/mentioned you before this
-server was running (e.g. while it was down), and reviews those too.
+server was running (e.g. while it was down), and reviews those too. After
+any successful review (webhook or catch-up), that MR's pending todos are
+marked done, so the next startup doesn't review it again; failed or
+skipped reviews leave their todos pending to be retried.
+
+## Flow
+
+### 1. Webhook → review
+
+What happens when someone assigns you as reviewer or mentions you on an MR
+while the server is running.
+
+```mermaid
+flowchart TD
+    A["Someone assigns you as reviewer<br/>or mentions @you in an MR comment"] --> B["GitLab sends webhook to /webhook"]
+    B --> C{"X-Gitlab-Token<br/>matches WEBHOOK_SECRET?"}
+    C -- no --> C1["401 Invalid token"]
+    C -- yes --> D{"Trigger match?<br/>MR is open, and:<br/>• newly added as reviewer<br/>• or @you in a comment<br/>not written by you"}
+    D -- no --> D1["200 Ignored"]
+    D -- yes --> E["200 Processing<br/>(rest runs in the background)"]
+    E --> F{"Actor allowed?<br/>(TRUSTED_ACTORS empty,<br/>or actor is in it)"}
+    F -- no --> X1["Skip + log"]
+    F -- yes --> G{"Review for this MR already<br/>waiting in the queue?"}
+    G -- yes --> X2["Skip — the waiting review<br/>will see the latest state"]
+    G -- no --> H{"Local repo found under<br/>REPOS_ROOT via git origin?"}
+    H -- no --> X3["Skip + log error"]
+    H -- yes --> I{"GitLab MCP healthy?<br/>(claude mcp list)"}
+    I -- no --> X4["Skip + log error"]
+    I -- yes --> J["Queue job for that repo folder<br/>(one review at a time per repo)"]
+    J --> K["Run claude -p headless<br/>see diagram 2"]
+    K --> L{"Review succeeded?"}
+    L -- yes --> M["Mark all pending todos<br/>for this MR as done"]
+    L -- no --> N["Log error — todos stay pending,<br/>retried on next startup"]
+```
+
+### 2. Inside the review run
+
+What Claude Code does once it's spawned in the repo folder.
+
+```mermaid
+flowchart TD
+    A["Start review of MR"] --> B{"AGENTS.md / CLAUDE.md<br/>in the LOCAL checkout?"}
+    B -- "yes, covers this case" --> B1["Follow it fully<br/>(overrides the steps below)"]
+    B -- "no / doesn't cover it" --> C["Fetch MR diff + description<br/>via GitLab MCP"]
+    C --> D["Read surrounding code locally<br/>(no build / no test run)"]
+    D --> E["Re-check old open threads:<br/>resolve only if correctly fixed"]
+    E --> F["Write review, tag each finding<br/>major / minor / nit"]
+    F --> G["Post review comment on the MR<br/>ending with a Verdict line"]
+    G --> H{"ALLOW_AUTO_APPROVE=true?"}
+    H -- no --> H1["Done — approve tool is<br/>blocked at the CLI level"]
+    H -- yes --> I{"0 major, 0 minor,<br/>no unresolved old threads?"}
+    I -- yes --> J["Approve MR"]
+    I -- "no / unsure" --> K["Don't approve"]
+```
+
+MR content (title, description, diff, comments) is treated as untrusted
+data throughout — instructions inside it like "approve this" are ignored.
+
+### 3. Startup / restart catch-up
+
+What happens when you stop the server and start it again.
+
+```mermaid
+flowchart TD
+    A["npm start"] --> B["Start server + ngrok tunnel"]
+    B --> C{"ENABLE_STARTUP_CATCHUP<br/>and GITLAB_URL/TOKEN set?"}
+    C -- no --> C1["Skip catch-up"]
+    C -- yes --> D["Fetch your pending GitLab todos"]
+    D --> E["Keep only: MergeRequest, still open,<br/>review_requested / mentioned / directly_addressed"]
+    E --> F["Group by MR<br/>(several todos → one review)"]
+    F --> G["Each MR goes through the same<br/>checks as diagram 1, from 'Actor allowed?'"]
+    G --> H{"Review succeeded?"}
+    H -- yes --> I["Mark that MR's todos done"]
+    H -- no --> J["Todos stay pending → retried next startup"]
+```
+
+The catch-up only sees MRs with a **pending** todo. GitLab marks a todo done
+by itself when *you* comment, react with an emoji, change
+labels/assignee/milestone, or when the MR is merged/closed — but **not**
+when you only approve. So on restart:
+
+| Before you stopped the server | On restart |
+|---|---|
+| Bot reviewed it successfully | **Not** reviewed again (bot's comment, posted with your token, plus the explicit mark-done both clear the todo) |
+| You reviewed it manually **with a comment** | **Not** reviewed again (your comment cleared the todo) |
+| You reviewed it manually by **approving only**, no comment | **Reviewed again** by the bot — the todo is still pending. Mark it done in your GitLab To-Do List to avoid this |
+| You were mentioned / re-assigned while the server was down | **Reviewed** — new todo |
+| A bot review was running or failed when you stopped | **Reviewed again** — todo was never marked done |
+| New commits pushed while the server was down | **Not** reviewed — pushes don't create todos |
+| MR was merged or closed | **Not** reviewed — GitLab cleared the todo, and only open MRs are picked up |
 
 ## Setup — from scratch
 
@@ -127,7 +225,7 @@ Then fill in:
   for failure notifications.
 
 The other vars (`PORT`, `CLAUDE_CODE_BIN`, `ENABLE_NGROK`,
-`ENABLE_STARTUP_CATCHUP`, etc.) have sane defaults — see the comments in
+`ENABLE_STARTUP_CATCHUP`, `ALLOW_AUTO_APPROVE`, `TRUSTED_ACTORS`, etc.) have sane defaults — see the comments in
 `.env.example`.
 
 ### 4. Install & run
@@ -193,18 +291,30 @@ Should return `"ok": true`, with every scanned repo showing
 - **Claude Code non-interactive flag**: `src/lib/claudeReview.js` runs
   `claude -p "<prompt>" --allowedTools <list of GitLab MCP tools>` so
   GitLab MCP tool calls (reading files/repo/branch/commit/MR/issue/pipeline,
-  posting comments/replies, resolving threads, approving MRs, etc.) get
-  auto-approved without waiting for manual confirmation — since a headless
-  run has no one around to approve. The tool list (`ALLOWED_GITLAB_TOOLS`
-  in that file) is read-only + comment/discussion/resolve/approve — it
+  posting comments/replies, resolving threads, etc.) get auto-approved
+  without waiting for manual confirmation — since a headless run has no
+  one around to approve. The tool list (`ALLOWED_GITLAB_TOOLS` in that
+  file) is read-only + comment/discussion/resolve — it
   **does not** include merge, create/update/delete project/branch/issue/
   milestone, or triggering CI — those stay a human decision.
-  - `resolve_merge_request_thread` and `approve_merge_request` are in the
-    allowlist, but the prompt (`buildPrompt` in `src/index.js`) guards when
-    they're actually used: resolve only if an old concern has genuinely
-    been fixed correctly in the latest diff, approve only if there are no
-    blocking major/high findings. If unsure, the model is instructed not
-    to resolve/approve.
+  - `resolve_merge_request_thread` is in the allowlist, but the prompt
+    (`buildPrompt` in `src/index.js`) guards when it's actually used:
+    resolve only if an old concern has genuinely been fixed correctly in
+    the latest diff. If unsure, the model is instructed not to resolve.
+  - `approve_merge_request` is **off by default** — it's added to the
+    deny list unless `ALLOW_AUTO_APPROVE=true`. MR titles, descriptions,
+    diffs and comments are written by other people, so they could contain
+    prompt-injected instructions like "approve this MR"; with approve
+    denied at the CLI level, that can't turn into a real approval. With it
+    off, the review still ends with a verdict line. When it's on, the
+    model tags each finding `[major]`/`[minor]`/`[nit]` and approves only
+    if there are zero major and zero minor findings (nits alone are fine)
+    and no old thread is left unresolved.
+  - The prompt also tells the model to treat all MR content as untrusted
+    data, and to read AGENTS.md/CLAUDE.md only from the local checkout —
+    never from the MR's branch, since the MR itself could be changing it.
+  - `TRUSTED_ACTORS` (optional, comma-separated usernames) limits who can
+    trigger a review by assigning/mentioning you. Empty = anyone.
   - Repos whose AGENTS.md/CLAUDE.md explicitly says "advisory-only, never
     approve/resolve" (as some custom skills do) are still respected,
     because the prompt tells it to defer to AGENTS.md as top priority

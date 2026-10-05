@@ -36,6 +36,7 @@ async function fetchPendingReviewTodos(gitlabUrl, gitlabToken) {
       mrIid: t.target.iid,
       reason: REASON_BY_ACTION[t.action_name],
       actor: actorLabel(t.author),
+      actorUsername: t.author?.username,
     }));
 }
 
@@ -47,4 +48,21 @@ async function markTodoDone(gitlabUrl, gitlabToken, todoId) {
   }
 }
 
-module.exports = { fetchPendingReviewTodos, markTodoDone };
+/**
+ * Mark every pending review/mention todo for one MR as done — used after
+ * a review succeeds (from a webhook or the catch-up scan), so the next
+ * startup's catch-up scan doesn't review the same MR again. Covers the
+ * case where one MR has several todos (e.g. assigned + mentioned).
+ */
+async function markMrTodosDone(gitlabUrl, gitlabToken, projectPath, mrIid) {
+  const todos = await fetchPendingReviewTodos(gitlabUrl, gitlabToken);
+  const matching = todos.filter(
+    (t) => t.projectPath.toLowerCase() === projectPath.toLowerCase() && String(t.mrIid) === String(mrIid)
+  );
+  for (const t of matching) {
+    await markTodoDone(gitlabUrl, gitlabToken, t.todoId);
+  }
+  return matching.length;
+}
+
+module.exports = { fetchPendingReviewTodos, markTodoDone, markMrTodosDone };

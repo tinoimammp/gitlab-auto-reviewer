@@ -30,6 +30,16 @@ const config = {
   // that haven't been handled yet, via the GitLab Todos API. Requires
   // GITLAB_URL + GITLAB_TOKEN to be set. Set to "false" to disable.
   enableStartupCatchup: process.env.ENABLE_STARTUP_CATCHUP !== 'false',
+  // Optional: let the headless review approve MRs. Off by default — MR
+  // descriptions/comments are untrusted input, so a prompt-injected
+  // "approve this" shouldn't be able to turn into a real approval.
+  allowAutoApprove: process.env.ALLOW_AUTO_APPROVE === 'true',
+  // Optional: comma-separated GitLab usernames allowed to trigger a review
+  // (assign you / mention you). Empty = anyone can trigger.
+  trustedActors: (process.env.TRUSTED_ACTORS || '')
+    .split(',')
+    .map((u) => u.trim().replace(/^@/, '').toLowerCase())
+    .filter(Boolean),
 };
 
 module.exports = config;
