@@ -18,8 +18,14 @@ async function waitForPublicUrl(retries = 20, delayMs = 500) {
   throw new Error('timed out waiting for the ngrok API to be ready at 127.0.0.1:4040');
 }
 
-function startNgrokTunnel(port) {
-  const proc = spawn('ngrok', ['http', String(port), '--log=stdout', '--log-format=json'], {
+// Starts the tunnel and returns a promise of its public URL (or null if it
+// couldn't be fetched). With `domain` (e.g. your free ngrok static domain,
+// "xxx.ngrok-free.app"), the URL stays the same across restarts.
+function startNgrokTunnel(port, domain) {
+  const args = ['http', String(port), '--log=stdout', '--log-format=json'];
+  if (domain) args.push(`--url=${domain.startsWith('http') ? domain : `https://${domain}`}`);
+
+  const proc = spawn('ngrok', args, {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
@@ -31,20 +37,19 @@ function startNgrokTunnel(port) {
     logger.error(`[ngrok] ${chunk.toString().trim()}`);
   });
 
-  waitForPublicUrl()
-    .then((url) => {
-      logger.info(`ngrok tunnel ready: ${url}`);
-      logger.info(`Register the GitLab webhook to: ${url}/webhook`);
-    })
-    .catch((err) => {
-      logger.error(`Couldn't fetch the ngrok URL: ${err.message}`);
-    });
-
   process.on('exit', () => {
     proc.kill();
   });
 
-  return proc;
+  return waitForPublicUrl()
+    .then((url) => {
+      logger.info(`ngrok tunnel ready: ${url}`);
+      return url;
+    })
+    .catch((err) => {
+      logger.error(`Couldn't fetch the ngrok URL: ${err.message}`);
+      return null;
+    });
 }
 
 module.exports = { startNgrokTunnel };

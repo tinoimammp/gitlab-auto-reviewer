@@ -120,7 +120,7 @@ What happens when you stop the server and start it again.
 
 ```mermaid
 flowchart TD
-    A["npm start"] --> B["Start server + ngrok tunnel"]
+    A["npm start"] --> B["Start server + ngrok tunnel<br/>(on NGROK_DOMAIN if set)"]
     B --> C{"ENABLE_STARTUP_CATCHUP<br/>and GITLAB_URL/TOKEN set?"}
     C -- no --> C1["Skip catch-up"]
     C -- yes --> D["Fetch your pending GitLab todos"]
@@ -173,6 +173,10 @@ without a review. So on restart:
   brew install ngrok
   ngrok config add-authtoken <your-authtoken>   # get one at https://dashboard.ngrok.com/get-started/your-authtoken
   ```
+  Then claim your **free static domain** at
+  [dashboard.ngrok.com → Domains](https://dashboard.ngrok.com/domains)
+  (e.g. `xxx.ngrok-free.app`) and put it in `NGROK_DOMAIN` — that keeps
+  the webhook URL the same across restarts.
 - **A GitLab Personal Access Token** with `api` scope — GitLab
   **Settings → Access Tokens**. You'll use this token for both step 1 and
   the `.env` file.
@@ -231,6 +235,7 @@ Then fill in:
 - `GITLAB_URL` / `GITLAB_TOKEN` — same GitLab instance URL and personal
   access token used in step 1. Needed for the startup catch-up scan and
   for failure notifications.
+- `NGROK_DOMAIN` — your free ngrok static domain from step 0.
 
 The other vars (`PORT`, `CLAUDE_CODE_BIN`, `ENABLE_NGROK`,
 `ENABLE_STARTUP_CATCHUP`, `ALLOW_AUTO_APPROVE`, `TRUSTED_ACTORS`, etc.) have sane defaults — see the comments in
@@ -246,8 +251,8 @@ npm start
 On startup the app will:
 
 - Start the webhook server on `PORT` (default `3001`).
-- Auto-start an ngrok tunnel (unless `ENABLE_NGROK=false`) and print the
-  public URL + `/webhook` path in the logs.
+- Auto-start an ngrok tunnel (unless `ENABLE_NGROK=false`) — on
+  `NGROK_DOMAIN` if set — and print the public `/webhook` URL in the logs.
 - Run the startup catch-up scan for MRs you're already assigned to review
   or mentioned in (unless `ENABLE_STARTUP_CATCHUP=false`).
 
@@ -256,8 +261,8 @@ On startup the app will:
 Copy the ngrok URL printed in the logs, e.g.:
 
 ```
-[INFO] ngrok tunnel ready: https://xxxx.ngrok-free.dev
-[INFO] Register the GitLab webhook to: https://xxxx.ngrok-free.dev/webhook
+[INFO] ngrok tunnel ready: https://xxxx.ngrok-free.app
+[INFO] Webhook URL: https://xxxx.ngrok-free.app/webhook
 ```
 
 **This is a per-repo step, not a one-time setup.** Repeat it individually
@@ -275,10 +280,10 @@ add:
 - **Secret Token**: same value as `WEBHOOK_SECRET`.
 - **Trigger**: check **Merge request events** and **Comments**.
 
-> On ngrok's free tier, the public URL changes every time you restart the
-> app — you'll need to update the webhook URL on **every one of those
-> projects** again after each restart, unless you're on a paid ngrok plan
-> with a reserved domain.
+> Without `NGROK_DOMAIN`, the public URL changes every time you restart
+> the app — you'd need to update the webhook URL on **every one of those
+> projects** again after each restart. Set `NGROK_DOMAIN` to your free
+> static domain so it stays the same.
 >
 > If your GitLab tier supports **group-level webhooks** (Settings →
 > Webhooks at the group, not project, level — a GitLab Premium/Ultimate

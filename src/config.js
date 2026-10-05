@@ -26,6 +26,9 @@ const config = {
   // Optional: auto-start an ngrok tunnel on npm start. Set to "false" to
   // disable (e.g. if you run ngrok manually, or deploy behind a real domain).
   enableNgrok: process.env.ENABLE_NGROK !== 'false',
+  // Optional: your free ngrok static domain (e.g. "xxx.ngrok-free.app"),
+  // so the public URL stays the same across restarts.
+  ngrokDomain: process.env.NGROK_DOMAIN || '',
   // Optional: on startup, scan for open MRs (assigned reviewer/mentioned)
   // that haven't been handled yet, via the GitLab Todos API. Requires
   // GITLAB_URL + GITLAB_TOKEN to be set. Set to "false" to disable.

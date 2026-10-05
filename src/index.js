@@ -325,13 +325,12 @@ app.get('/healthz', async (req, res) => {
   res.json({ ok, reposIndexed: entries.length, repos: reposHealth });
 });
 
-app.listen(config.port, () => {
+app.listen(config.port, async () => {
   logger.info(`Webhook server running on port ${config.port}`);
   logger.info(`Scanning repos in: ${config.reposRoot}`);
 
-  if (config.enableNgrok) {
-    startNgrokTunnel(config.port);
-  }
+  const publicUrl = config.enableNgrok ? await startNgrokTunnel(config.port, config.ngrokDomain) : null;
+  if (publicUrl) logger.info(`Webhook URL: ${publicUrl.replace(/\/$/, '')}/webhook`);
 
   if (config.enableStartupCatchup) {
     runStartupCatchup();
