@@ -1,5 +1,12 @@
+function pad(n) {
+  return String(n).padStart(2, '0');
+}
+
+// Local time, e.g. "2026-10-05 16:35:26"
 function ts() {
-  return new Date().toISOString();
+  const d = new Date();
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+    `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 module.exports = {
