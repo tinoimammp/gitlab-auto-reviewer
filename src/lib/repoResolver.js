@@ -28,6 +28,22 @@ function remoteUrlToPath(remoteUrl) {
   }
 }
 
+/**
+ * Host part of a git remote URL (lowercase), e.g. "gitlab.com" — used to
+ * tell GitLab repos apart from e.g. GitHub ones when registering webhooks.
+ */
+function remoteUrlToHost(remoteUrl) {
+  const cleaned = remoteUrl.trim();
+  const sshMatch = cleaned.match(/^[^@]+@([^:]+):/); // git@host:namespace/repo
+  if (sshMatch) return sshMatch[1].toLowerCase();
+
+  try {
+    return new URL(cleaned).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
 function findGitDirs(rootDir, maxDepth = 3) {
   const results = [];
 
@@ -57,10 +73,12 @@ function findGitDirs(rootDir, maxDepth = 3) {
 }
 
 /**
- * Build the index: { "group/repo": "/abs/path/to/folder" }
+ * Build the index: { "group/repo": "/abs/path/to/folder" }, plus each
+ * project's remote host: { "group/repo": "gitlab.com" }.
  */
 function buildRepoIndex(reposRoot) {
   const index = {};
+  const hosts = {};
   const gitDirs = findGitDirs(reposRoot);
 
   for (const dir of gitDirs) {
@@ -89,10 +107,11 @@ function buildRepoIndex(reposRoot) {
     }
 
     index[projectPath] = dir;
+    hosts[projectPath] = remoteUrlToHost(remoteUrl);
   }
 
   logger.info(`Repo index built: ${Object.keys(index).length} repo(s) found in ${reposRoot}`);
-  return index;
+  return { index, hosts };
 }
 
 /**
@@ -100,9 +119,9 @@ function buildRepoIndex(reposRoot) {
  * so we don't need to re-scan the filesystem on every incoming webhook.
  */
 function createRepoResolver(reposRoot, refreshMs) {
-  let index = buildRepoIndex(reposRoot);
+  let { index, hosts } = buildRepoIndex(reposRoot);
   setInterval(() => {
-    index = buildRepoIndex(reposRoot);
+    ({ index, hosts } = buildRepoIndex(reposRoot));
   }, refreshMs).unref();
 
   return {
@@ -113,10 +132,15 @@ function createRepoResolver(reposRoot, refreshMs) {
     list() {
       return { ...index };
     },
+    // Project paths whose origin remote lives on the given host.
+    projectsOnHost(host) {
+      const wanted = host.toLowerCase();
+      return Object.keys(index).filter((p) => hosts[p] === wanted);
+    },
     forceRefresh() {
-      index = buildRepoIndex(reposRoot);
+      ({ index, hosts } = buildRepoIndex(reposRoot));
     },
   };
 }
 
-module.exports = { createRepoResolver, remoteUrlToPath };
+module.exports = { createRepoResolver, remoteUrlToPath, remoteUrlToHost };

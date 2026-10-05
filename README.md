@@ -20,8 +20,9 @@ gitlab-auto-reviewer/
         ├── repoResolver.js # auto-detect local repo folder from git remote
         ├── mcpHealth.js    # health check for GitLab MCP before running a review
         ├── claudeReview.js # spawn Claude Code headless + per-repo queue
-        ├── gitlabTodos.js  # GitLab Todos API, used for the startup catch-up scan
-        └── ngrokTunnel.js  # auto-start an ngrok tunnel on npm start
+        ├── gitlabTodos.js  # GitLab Todos + approvals API (catch-up scan, push re-review)
+        ├── gitlabWebhooks.js # auto-register the webhook on every GitLab repo under REPOS_ROOT
+        └── ngrokTunnel.js  # auto-start an ngrok tunnel on npm start (optionally on a static domain)
 ```
 
 ## How it works
@@ -125,7 +126,8 @@ What happens when you stop the server and start it again.
 ```mermaid
 flowchart TD
     A["npm start"] --> B["Start server + ngrok tunnel<br/>(on NGROK_DOMAIN if set)"]
-    B --> C{"ENABLE_STARTUP_CATCHUP<br/>and GITLAB_URL/TOKEN set?"}
+    B --> W["Register / update webhook on every<br/>GitLab repo under REPOS_ROOT"]
+    W --> C{"ENABLE_STARTUP_CATCHUP<br/>and GITLAB_URL/TOKEN set?"}
     C -- no --> C1["Skip catch-up"]
     C -- yes --> D["Fetch your pending GitLab todos"]
     D --> E["Keep only: MergeRequest, still open,<br/>review_requested / mentioned / directly_addressed"]
@@ -237,14 +239,14 @@ Then fill in:
 - `REPOS_ROOT` — the parent folder where all your local repo clones live
   (e.g. `/home/you/repos`).
 - `GITLAB_URL` / `GITLAB_TOKEN` — same GitLab instance URL and personal
-  access token used in step 1. Needed for the startup catch-up scan and
-  the approval check on push.
+  access token used in step 1. Needed for webhook auto-registration, the
+  startup catch-up scan, and the approval check on push.
 - `NGROK_DOMAIN` — your free ngrok static domain from step 0.
 
 The other vars (`PORT`, `CLAUDE_CODE_BIN`, `ENABLE_NGROK`,
-`ENABLE_REVIEW_ON_PUSH`, `ENABLE_STARTUP_CATCHUP`, `ALLOW_AUTO_APPROVE`,
-`TRUSTED_ACTORS`, etc.) have sane defaults — see the comments in
-`.env.example`.
+`ENABLE_WEBHOOK_AUTOREGISTER`, `ENABLE_REVIEW_ON_PUSH`,
+`ENABLE_STARTUP_CATCHUP`, `ALLOW_AUTO_APPROVE`, `TRUSTED_ACTORS`, etc.)
+have sane defaults — see the comments in `.env.example`.
 
 ### 4. Install & run
 
@@ -258,42 +260,51 @@ On startup the app will:
 - Start the webhook server on `PORT` (default `3001`).
 - Auto-start an ngrok tunnel (unless `ENABLE_NGROK=false`) — on
   `NGROK_DOMAIN` if set — and print the public `/webhook` URL in the logs.
+- Register the webhook on every GitLab repo under `REPOS_ROOT` (unless
+  `ENABLE_WEBHOOK_AUTOREGISTER=false`) — see step 5.
 - Run the startup catch-up scan for MRs you're already assigned to review
   or mentioned in (unless `ENABLE_STARTUP_CATCHUP=false`).
 
-### 5. Register the webhook in GitLab
+### 5. Webhooks — registered automatically
 
-Copy the ngrok URL printed in the logs, e.g.:
+On every startup the app registers (or updates) its webhook on **each
+repo cloned under `REPOS_ROOT` whose `origin` is on `GITLAB_URL`'s host**
+— repos on other hosts (e.g. GitHub) and GitLab projects you haven't
+cloned are left alone. Each hook gets:
+
+- **URL**: `<ngrok URL>/webhook?source=gitlab-auto-reviewer&v=<fingerprint>`
+  — `v` is a short hash of `WEBHOOK_SECRET` (see below)
+- **Secret Token**: `WEBHOOK_SECRET`
+- **Triggers**: only **Merge request events** and **Comments** — every
+  other event (push, issues, pipeline, etc.) is switched off, including on
+  a hand-registered hook that had extra events ticked
+
+The logs show a summary, e.g.:
 
 ```
-[INFO] ngrok tunnel ready: https://xxxx.ngrok-free.app
-[INFO] Webhook URL: https://xxxx.ngrok-free.app/webhook
+[INFO] Webhooks → https://xxx.ngrok-free.app/webhook?source=gitlab-auto-reviewer&v=41112091: 1 created, 2 updated, 5 up to date, 1 failed
 ```
 
-**This is a per-repo step, not a one-time setup.** Repeat it individually
-for every single GitLab project you want auto-reviewed on — e.g. if you
-have `group-a/service-one`, `group-a/service-two`, `group-b/frontend-app`,
-etc., each one needs its own webhook registered. A project that's cloned
-under `REPOS_ROOT` but has no webhook configured on GitLab will simply
-never trigger a review — it'll never send anything to `/webhook` in the
-first place.
+- **Already registered with the same address**: left untouched — no
+  request is sent, it's just counted as "up to date". GitLab never returns
+  a hook's secret token, so the `v` fingerprint in the URL is what tells
+  the app the secret is unchanged too: if you change `WEBHOOK_SECRET`, the
+  URL changes and every hook gets updated on the next startup.
+- **Existing hooks**: a hook already pointing to `/webhook` on an ngrok
+  domain (e.g. one you added by hand earlier) is updated in place rather
+  than duplicated. Any other webhook on the project is never touched.
+- **Changed URL**: without a static domain, the ngrok URL changes on
+  every restart — the hooks are simply updated to the new one on startup.
+  With `NGROK_DOMAIN` set, they just stay up to date.
+- **"failed"**: managing webhooks needs the **Maintainer** role on the
+  project. For projects where you're only a Developer, ask a maintainer to
+  add the hook by hand in **Settings → Webhooks** with the values above.
+- A repo cloned **after** startup gets its hook on the next restart.
 
-For each such project, go to that project's **Settings → Webhooks** and
-add:
-
-- **URL**: the printed `.../webhook` URL above.
-- **Secret Token**: same value as `WEBHOOK_SECRET`.
-- **Trigger**: check **Merge request events** and **Comments**.
-
-> Without `NGROK_DOMAIN`, the public URL changes every time you restart
-> the app — you'd need to update the webhook URL on **every one of those
-> projects** again after each restart. Set `NGROK_DOMAIN` to your free
-> static domain so it stays the same.
->
 > If your GitLab tier supports **group-level webhooks** (Settings →
 > Webhooks at the group, not project, level — a GitLab Premium/Ultimate
-> feature), you can register it once on the group instead of once per
-> project, and it'll apply to every project underneath.
+> feature), you can register it once on the group instead and set
+> `ENABLE_WEBHOOK_AUTOREGISTER=false`.
 
 ### 6. Verify
 

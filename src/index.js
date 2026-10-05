@@ -5,6 +5,7 @@ const { createRepoResolver } = require('./lib/repoResolver');
 const { createMcpHealthChecker } = require('./lib/mcpHealth');
 const { queueReview } = require('./lib/claudeReview');
 const { startNgrokTunnel } = require('./lib/ngrokTunnel');
+const { registerWebhooks } = require('./lib/gitlabWebhooks');
 const { fetchPendingReviewTodos, markMrTodosDone, hasUserApproved } = require('./lib/gitlabTodos');
 
 const app = express();
@@ -377,12 +378,45 @@ app.get('/healthz', async (req, res) => {
   res.json({ ok, reposIndexed: entries.length, repos: reposHealth });
 });
 
+// Register/update the webhook on every GitLab project cloned under
+// REPOS_ROOT (only ones whose origin is on GITLAB_URL's host).
+async function autoregisterWebhooks(publicUrl) {
+  if (!config.enableWebhookAutoregister) return;
+  if (!config.gitlabUrl || !config.gitlabToken) {
+    logger.warn('GITLAB_URL/GITLAB_TOKEN not set — skipping webhook auto-registration.');
+    return;
+  }
+  if (!publicUrl) {
+    logger.warn('No ngrok URL (ngrok disabled or failed to start) — skipping webhook auto-registration.');
+    return;
+  }
+
+  const gitlabHost = new URL(config.gitlabUrl).hostname;
+  const projectPaths = repoResolver.projectsOnHost(gitlabHost);
+  if (projectPaths.length === 0) {
+    logger.warn(`Webhooks: no repos under ${config.reposRoot} with an origin on ${gitlabHost} — nothing to register.`);
+    return;
+  }
+
+  await registerWebhooks({
+    gitlabUrl: config.gitlabUrl,
+    gitlabToken: config.gitlabToken,
+    projectPaths,
+    publicUrl,
+    secret: config.webhookSecret,
+  });
+}
+
 app.listen(config.port, async () => {
   logger.info(`Webhook server running on port ${config.port}`);
   logger.info(`Scanning repos in: ${config.reposRoot}`);
 
   const publicUrl = config.enableNgrok ? await startNgrokTunnel(config.port, config.ngrokDomain) : null;
   if (publicUrl) logger.info(`Webhook URL: ${publicUrl.replace(/\/$/, '')}/webhook`);
+
+  autoregisterWebhooks(publicUrl).catch((err) => {
+    logger.error(`Webhook auto-registration failed: ${err.message}`);
+  });
 
   if (config.enableStartupCatchup) {
     runStartupCatchup();

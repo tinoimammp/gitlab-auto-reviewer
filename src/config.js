@@ -29,6 +29,10 @@ const config = {
   // Optional: your free ngrok static domain (e.g. "xxx.ngrok-free.app"),
   // so the public URL stays the same across restarts.
   ngrokDomain: process.env.NGROK_DOMAIN || '',
+  // Optional: on startup, register/update this server's webhook on every
+  // GitLab project cloned under REPOS_ROOT. Requires GITLAB_URL +
+  // GITLAB_TOKEN and Maintainer role per project. Set to "false" to disable.
+  enableWebhookAutoregister: process.env.ENABLE_WEBHOOK_AUTOREGISTER !== 'false',
   // Optional: re-review an MR when new commits are pushed to it (only if
   // you're a reviewer and haven't approved it yet). Set to "false" to disable.
   enableReviewOnPush: process.env.ENABLE_REVIEW_ON_PUSH !== 'false',
