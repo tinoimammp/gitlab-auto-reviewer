@@ -21,9 +21,13 @@ function actorLabel(payload) {
 }
 
 function shouldTrigger(payload) {
+  // Anything without the basic shape we rely on (unknown event types,
+  // payloads from other GitLab versions, junk) is simply not a trigger.
+  if (typeof payload?.project?.path_with_namespace !== 'string') return null;
+
   if (payload.object_kind === 'merge_request') {
     // Only open MRs — no point reviewing (or approving) a merged/closed one.
-    if (payload.object_attributes?.state !== 'opened') return null;
+    if (payload.object_attributes?.state !== 'opened' || !payload.object_attributes.iid) return null;
 
     // Only trigger when you were *newly* added as reviewer — not when the
     // reviewer list changes for some other reason (e.g. someone else is
@@ -62,14 +66,14 @@ function shouldTrigger(payload) {
     }
   }
   if (payload.object_kind === 'note' && payload.merge_request) {
-    if (payload.merge_request.state !== 'opened') return null;
+    if (payload.merge_request.state !== 'opened' || !payload.merge_request.iid) return null;
 
     // Ignore notes written by you: the bot posts its reviews with your
     // token, so a review that happens to contain "@you" would otherwise
     // trigger another review of itself, in a loop.
     if (String(payload.user?.id) === String(config.targetUserId)) return null;
 
-    const note = payload.object_attributes.note || '';
+    const note = payload.object_attributes?.note || '';
     if (note.includes(`@${config.targetUsername}`)) {
       return {
         reason: 'mentioned-in-comment',
@@ -271,16 +275,26 @@ function processTrigger(trigger) {
   });
 }
 
-app.post('/webhook', async (req, res) => {
+// Not async on purpose: Express 4 doesn't catch errors from async
+// handlers, and an unhandled rejection would take the whole server down.
+// Errors are caught here instead, so one odd payload can't kill it.
+app.post('/webhook', (req, res) => {
   if (req.headers['x-gitlab-token'] !== config.webhookSecret) {
     return res.status(401).send('Invalid token');
   }
 
-  const trigger = shouldTrigger(req.body);
+  let trigger;
+  try {
+    trigger = shouldTrigger(req.body);
+  } catch (err) {
+    logger.error(`Incoming webhook — couldn't parse payload, ignored: ${err.message}`);
+    return res.status(200).send('Ignored');
+  }
+
   if (!trigger) {
     logger.info(
-      `Incoming webhook (${req.body.object_kind || 'unknown'}) from project ` +
-      `"${req.body.project?.path_with_namespace || 'unknown'}" — ignored (doesn't match trigger criteria).`
+      `Incoming webhook (${req.body?.object_kind || 'unknown'}) from project ` +
+      `"${req.body?.project?.path_with_namespace || 'unknown'}" — ignored (doesn't match trigger criteria).`
     );
     return res.status(200).send('Ignored');
   }
@@ -289,7 +303,9 @@ app.post('/webhook', async (req, res) => {
   res.status(200).send('Processing');
 
   logger.info(`Incoming webhook — trigger matched: MR !${trigger.mrIid} @ ${trigger.projectPath} (${trigger.reason}, by ${trigger.actor})`);
-  processTrigger(trigger);
+  Promise.resolve()
+    .then(() => processTrigger(trigger))
+    .catch((err) => logger.error(`Failed to process ${trigger.projectPath} !${trigger.mrIid}: ${err.message}`));
 });
 
 // Startup catch-up: when the server first starts, check for MRs that were
@@ -364,18 +380,23 @@ async function runStartupCatchup() {
 }
 
 app.get('/healthz', async (req, res) => {
-  const repos = repoResolver.list();
-  const entries = await Promise.all(
-    Object.entries(repos).map(async ([projectPath, repoPath]) => {
-      const health = await checkMcpHealth(repoPath);
-      return [projectPath, { repoPath, ok: health.ok, reason: health.reason }];
-    })
-  );
+  try {
+    const repos = repoResolver.list();
+    const entries = await Promise.all(
+      Object.entries(repos).map(async ([projectPath, repoPath]) => {
+        const health = await checkMcpHealth(repoPath);
+        return [projectPath, { repoPath, ok: health.ok, reason: health.reason }];
+      })
+    );
 
-  const reposHealth = Object.fromEntries(entries);
-  const ok = entries.every(([, h]) => h.ok);
+    const reposHealth = Object.fromEntries(entries);
+    const ok = entries.every(([, h]) => h.ok);
 
-  res.json({ ok, reposIndexed: entries.length, repos: reposHealth });
+    res.json({ ok, reposIndexed: entries.length, repos: reposHealth });
+  } catch (err) {
+    logger.error(`/healthz failed: ${err.message}`);
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
 // Register/update the webhook on every GitLab project cloned under
@@ -419,6 +440,14 @@ app.listen(config.port, async () => {
   });
 
   if (config.enableStartupCatchup) {
-    runStartupCatchup();
+    runStartupCatchup().catch((err) => {
+      logger.error(`Startup catch-up failed: ${err.message}`);
+    });
   }
+});
+
+// Last-resort safety net: a long-running server shouldn't silently die on
+// one stray rejected promise — log it and keep serving.
+process.on('unhandledRejection', (err) => {
+  logger.error(`Unhandled promise rejection (server kept running): ${err?.stack || err}`);
 });
