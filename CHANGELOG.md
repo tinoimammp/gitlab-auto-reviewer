@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project follows [Semantic Versioning](https://semver.org/).
 
+## [2.0.2] - 2026-10-05
+
+### Changed
+
+- Colored log output in the terminal: dim timestamp, and `[INFO]` in
+  cyan, `[WARN]` in yellow, `[ERROR]` in red. Output piped to a file, or
+  run with `NO_COLOR` set, stays plain text.
+
 ## [2.0.1] - 2026-10-05
 
 ### Changed
@@ -76,6 +84,7 @@ project follows [Semantic Versioning](https://semver.org/).
   - ngrok auto-start,
   - startup catch-up via the GitLab Todos API.
 
+[2.0.2]: https://github.com/tinoimammp/gitlab-auto-reviewer/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/tinoimammp/gitlab-auto-reviewer/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/tinoimammp/gitlab-auto-reviewer/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/tinoimammp/gitlab-auto-reviewer/releases/tag/v1.0.0
