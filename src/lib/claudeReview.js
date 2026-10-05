@@ -6,8 +6,8 @@ const logger = require('./logger');
 const queues = new Map();
 
 // Read-only GitLab MCP tools (file, repo tree, branch, commit, MR, issue,
-// pipeline) plus comment/discussion/resolve/approve, auto-approved for
-// headless runs. Deliberately does NOT include merge, create/update/delete
+// pipeline) plus comment/discussion/resolve, auto-approved for headless
+// runs (approve itself is gated separately, see APPROVE_TOOL below). Deliberately does NOT include merge, create/update/delete
 // project/branch/issue/milestone, or triggering CI — those stay a human
 // decision. The prompt (see buildPrompt in index.js) decides when
 // resolve/approve are actually used, and repos whose AGENTS.md says
@@ -49,7 +49,6 @@ const ALLOWED_GITLAB_TOOLS = [
   'create_merge_request_discussion_note',
   'create_merge_request_thread',
   'resolve_merge_request_thread',
-  'approve_merge_request',
   'unapprove_merge_request',
   // Issue (read-only, for context on issues referenced by the MR)
   'get_issue',
@@ -74,6 +73,11 @@ const ALLOWED_GITLAB_TOOLS = [
 // before reading files/diffs) — the same pattern already used in some
 // repos' project settings.
 const ALLOWED_TOOLS = [...ALLOWED_GITLAB_TOOLS, 'Bash(git fetch *)'];
+
+// Approve is gated separately (config.allowAutoApprove): when it's off, the
+// tool is explicitly denied rather than just left out of the allowlist, so
+// a prompt-injected "approve this MR" can't get through at all.
+const APPROVE_TOOL = 'mcp__gitlab__approve_merge_request';
 
 // This review only reads the diff + code, it does NOT need to build or
 // run the app or test suite — build/test status is already covered by the
@@ -104,14 +108,17 @@ const DISALLOWED_TOOLS = [
   'Bash(make build*)',
 ];
 
-function runClaudeCode(claudeCodeBin, repoPath, prompt, timeoutMs) {
+function runClaudeCode(claudeCodeBin, repoPath, prompt, timeoutMs, allowApprove) {
+  const allowed = allowApprove ? [...ALLOWED_TOOLS, APPROVE_TOOL] : ALLOWED_TOOLS;
+  const disallowed = allowApprove ? DISALLOWED_TOOLS : [...DISALLOWED_TOOLS, APPROVE_TOOL];
+
   return new Promise((resolve, reject) => {
     execFile(
       claudeCodeBin,
       [
         '-p', prompt,
-        '--allowedTools', ALLOWED_TOOLS.join(','),
-        '--disallowedTools', DISALLOWED_TOOLS.join(','),
+        '--allowedTools', allowed.join(','),
+        '--disallowedTools', disallowed.join(','),
       ],
       { cwd: repoPath, maxBuffer: 1024 * 1024 * 20, timeout: timeoutMs },
       (err, stdout, stderr) => {
@@ -122,21 +129,27 @@ function runClaudeCode(claudeCodeBin, repoPath, prompt, timeoutMs) {
   });
 }
 
-function queueReview({ claudeCodeBin, repoPath, prompt, timeoutMs, label }) {
+// Returns a promise that resolves to true if the review ran successfully,
+// or false if it failed (never rejects, so callers don't need a .catch).
+// onStart (optional) is called right before Claude Code is spawned, i.e.
+// once the job leaves the queue.
+function queueReview({ claudeCodeBin, repoPath, prompt, timeoutMs, label, allowApprove = false, onStart }) {
   const prev = queues.get(repoPath) || Promise.resolve();
 
   const job = prev
-    .catch(() => {}) // previous job failed, still move on to the next one
     .then(() => {
+      if (onStart) onStart();
       logger.info(`Starting review: ${label} (repo: ${repoPath})`);
-      return runClaudeCode(claudeCodeBin, repoPath, prompt, timeoutMs);
+      return runClaudeCode(claudeCodeBin, repoPath, prompt, timeoutMs, allowApprove);
     })
     .then((output) => {
       logger.info(`Finished review: ${label}`);
       logger.info(output);
+      return true;
     })
     .catch((err) => {
       logger.error(`Review failed: ${label} — ${err.message}`);
+      return false;
     });
 
   queues.set(repoPath, job);
