@@ -65,4 +65,21 @@ async function markMrTodosDone(gitlabUrl, gitlabToken, projectPath, mrIid) {
   return matching.length;
 }
 
-module.exports = { fetchPendingReviewTodos, markTodoDone, markMrTodosDone };
+/**
+ * Whether the given user has already approved the MR. Used by the catch-up
+ * scan: GitLab doesn't mark a review-request todo done when you approve
+ * (only when you comment/react/etc.), so an MR you approved by hand while
+ * the server was down would otherwise get reviewed again on startup.
+ */
+async function hasUserApproved(gitlabUrl, gitlabToken, projectPath, mrIid, userId) {
+  const project = encodeURIComponent(projectPath);
+  const url = `${gitlabUrl.replace(/\/$/, '')}/api/v4/projects/${project}/merge_requests/${mrIid}/approvals`;
+  const res = await fetch(url, { headers: { 'PRIVATE-TOKEN': gitlabToken } });
+  if (!res.ok) {
+    throw new Error(`GitLab API ${res.status}: ${await res.text()}`);
+  }
+  const data = await res.json();
+  return (data.approved_by || []).some((a) => String(a.user?.id) === String(userId));
+}
+
+module.exports = { fetchPendingReviewTodos, markTodoDone, markMrTodosDone, hasUserApproved };

@@ -126,7 +126,12 @@ flowchart TD
     C -- yes --> D["Fetch your pending GitLab todos"]
     D --> E["Keep only: MergeRequest, still open,<br/>review_requested / mentioned / directly_addressed"]
     E --> F["Group by MR<br/>(several todos → one review)"]
-    F --> G["Each MR goes through the same<br/>checks as diagram 1, from 'Actor allowed?'"]
+    F --> F1{"Only review-request todos<br/>(no pending mention)?"}
+    F1 -- yes --> F2{"Already approved by you?"}
+    F2 -- yes --> F3["Skip review,<br/>mark that MR's todos done"]
+    F2 -- "no / API error" --> G
+    F1 -- "no, has a mention" --> G
+    G["Each MR goes through the same<br/>checks as diagram 1, from 'Actor allowed?'"]
     G --> H{"Review succeeded?"}
     H -- yes --> I["Mark that MR's todos done"]
     H -- no --> J["Todos stay pending → retried next startup"]
@@ -135,13 +140,16 @@ flowchart TD
 The catch-up only sees MRs with a **pending** todo. GitLab marks a todo done
 by itself when *you* comment, react with an emoji, change
 labels/assignee/milestone, or when the MR is merged/closed — but **not**
-when you only approve. So on restart:
+when you only approve. To cover that, the catch-up also checks the MR's
+approvals: a review-request todo on an MR you already approved is cleared
+without a review. So on restart:
 
 | Before you stopped the server | On restart |
 |---|---|
 | Bot reviewed it successfully | **Not** reviewed again (bot's comment, posted with your token, plus the explicit mark-done both clear the todo) |
 | You reviewed it manually **with a comment** | **Not** reviewed again (your comment cleared the todo) |
-| You reviewed it manually by **approving only**, no comment | **Reviewed again** by the bot — the todo is still pending. Mark it done in your GitLab To-Do List to avoid this |
+| You reviewed it manually by **approving only**, no comment | **Not** reviewed again — the catch-up sees your approval and clears the todo |
+| You approved it, but were also **mentioned** while the server was down | **Reviewed** — a pending mention may be a new question, so it isn't skipped |
 | You were mentioned / re-assigned while the server was down | **Reviewed** — new todo |
 | A bot review was running or failed when you stopped | **Reviewed again** — todo was never marked done |
 | New commits pushed while the server was down | **Not** reviewed — pushes don't create todos |

@@ -5,7 +5,7 @@ const { createRepoResolver } = require('./lib/repoResolver');
 const { createMcpHealthChecker } = require('./lib/mcpHealth');
 const { queueReview } = require('./lib/claudeReview');
 const { startNgrokTunnel } = require('./lib/ngrokTunnel');
-const { fetchPendingReviewTodos, markMrTodosDone } = require('./lib/gitlabTodos');
+const { fetchPendingReviewTodos, markMrTodosDone, hasUserApproved } = require('./lib/gitlabTodos');
 
 const app = express();
 app.use(express.json());
@@ -254,18 +254,41 @@ async function runStartupCatchup() {
   const byMr = new Map();
   for (const todo of todos) {
     const key = mrKey(todo.projectPath, todo.mrIid);
-    if (!byMr.has(key)) byMr.set(key, todo);
+    if (!byMr.has(key)) byMr.set(key, []);
+    byMr.get(key).push(todo);
   }
 
-  logger.info(`Startup catch-up: found ${byMr.size} MR(s) that need reviewing.`);
+  logger.info(`Startup catch-up: found ${byMr.size} MR(s) with pending todos.`);
 
-  for (const todo of byMr.values()) {
-    logger.info(`Startup catch-up — trigger matched: MR !${todo.mrIid} @ ${todo.projectPath} (${todo.reason}, by ${todo.actor})`);
+  for (const mrTodos of byMr.values()) {
+    // Prefer the mention todo when there is one, so the prompt tells the
+    // model it was mentioned (i.e. there may be a question to answer).
+    const todo = mrTodos.find((t) => t.reason === 'mentioned-in-comment') || mrTodos[0];
+    const { projectPath, mrIid } = todo;
+
+    // Review-request only, and you already approved it by hand (GitLab
+    // doesn't clear the todo on approve) — nothing left to do. A pending
+    // mention still gets reviewed, since it may be a new question.
+    if (todo.reason === 'assigned-as-reviewer') {
+      let approved = false;
+      try {
+        approved = await hasUserApproved(config.gitlabUrl, config.gitlabToken, projectPath, mrIid, config.targetUserId);
+      } catch (err) {
+        logger.warn(`Startup catch-up: couldn't check approval for MR !${mrIid} @ ${projectPath}, reviewing anyway: ${err.message}`);
+      }
+      if (approved) {
+        logger.info(`Startup catch-up: MR !${mrIid} @ ${projectPath} already approved by you — skipping review, clearing todo.`);
+        await clearMrTodos(projectPath, mrIid);
+        continue;
+      }
+    }
+
+    logger.info(`Startup catch-up — trigger matched: MR !${mrIid} @ ${projectPath} (${todo.reason}, by ${todo.actor})`);
 
     processTrigger({
       reason: todo.reason,
-      projectPath: todo.projectPath,
-      mrIid: todo.mrIid,
+      projectPath,
+      mrIid,
       actor: todo.actor,
       actorUsername: todo.actorUsername,
     });
