@@ -27,7 +27,9 @@ gitlab-auto-reviewer/
 ## How it works
 
 1. GitLab sends a webhook event (`merge_request` or `note`) to `/webhook`.
-2. The server checks: were you just assigned as reviewer, or mentioned?
+2. The server checks: were you just assigned as reviewer, mentioned, or
+   were new commits pushed to an MR you're reviewing (and haven't
+   approved yet)?
 3. If so, the server looks for the matching local repo folder — by scanning
    `REPOS_ROOT`, reading each repo's `git remote get-url origin`, and
    matching it against `project.path_with_namespace` from the webhook
@@ -70,10 +72,10 @@ while the server is running.
 
 ```mermaid
 flowchart TD
-    A["Someone assigns you as reviewer<br/>or mentions @you in an MR comment"] --> B["GitLab sends webhook to /webhook"]
+    A["Someone assigns you as reviewer,<br/>mentions @you in an MR comment,<br/>or pushes commits to an MR you review"] --> B["GitLab sends webhook to /webhook"]
     B --> C{"X-Gitlab-Token<br/>matches WEBHOOK_SECRET?"}
     C -- no --> C1["401 Invalid token"]
-    C -- yes --> D{"Trigger match?<br/>MR is open, and:<br/>• newly added as reviewer<br/>• or @you in a comment<br/>not written by you"}
+    C -- yes --> D{"Trigger match?<br/>MR is open, and:<br/>• newly added as reviewer<br/>• or @you in a comment not written by you<br/>• or new commits, you're a reviewer,<br/>not a draft, not pushed by you"}
     D -- no --> D1["200 Ignored"]
     D -- yes --> E["200 Processing<br/>(rest runs in the background)"]
     E --> F{"Actor allowed?<br/>(TRUSTED_ACTORS empty,<br/>or actor is in it)"}
@@ -82,7 +84,9 @@ flowchart TD
     G -- yes --> X2["Skip — the waiting review<br/>will see the latest state"]
     G -- no --> H{"Local repo found under<br/>REPOS_ROOT via git origin?"}
     H -- no --> X3["Skip + log error"]
-    H -- yes --> I{"GitLab MCP healthy?<br/>(claude mcp list)"}
+    H -- yes --> P{"Push trigger and<br/>you already approved?"}
+    P -- yes --> X5["Skip — nothing left to re-review"]
+    P -- "no / not a push" --> I{"GitLab MCP healthy?<br/>(claude mcp list)"}
     I -- no --> X4["Skip + log error"]
     I -- yes --> J["Queue job for that repo folder<br/>(one review at a time per repo)"]
     J --> K["Run claude -p headless<br/>see diagram 2"]
@@ -234,11 +238,12 @@ Then fill in:
   (e.g. `/home/you/repos`).
 - `GITLAB_URL` / `GITLAB_TOKEN` — same GitLab instance URL and personal
   access token used in step 1. Needed for the startup catch-up scan and
-  for failure notifications.
+  the approval check on push.
 - `NGROK_DOMAIN` — your free ngrok static domain from step 0.
 
 The other vars (`PORT`, `CLAUDE_CODE_BIN`, `ENABLE_NGROK`,
-`ENABLE_STARTUP_CATCHUP`, `ALLOW_AUTO_APPROVE`, `TRUSTED_ACTORS`, etc.) have sane defaults — see the comments in
+`ENABLE_REVIEW_ON_PUSH`, `ENABLE_STARTUP_CATCHUP`, `ALLOW_AUTO_APPROVE`,
+`TRUSTED_ACTORS`, etc.) have sane defaults — see the comments in
 `.env.example`.
 
 ### 4. Install & run

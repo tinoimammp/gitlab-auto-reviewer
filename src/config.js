@@ -29,6 +29,9 @@ const config = {
   // Optional: your free ngrok static domain (e.g. "xxx.ngrok-free.app"),
   // so the public URL stays the same across restarts.
   ngrokDomain: process.env.NGROK_DOMAIN || '',
+  // Optional: re-review an MR when new commits are pushed to it (only if
+  // you're a reviewer and haven't approved it yet). Set to "false" to disable.
+  enableReviewOnPush: process.env.ENABLE_REVIEW_ON_PUSH !== 'false',
   // Optional: on startup, scan for open MRs (assigned reviewer/mentioned)
   // that haven't been handled yet, via the GitLab Todos API. Requires
   // GITLAB_URL + GITLAB_TOKEN to be set. Set to "false" to disable.
