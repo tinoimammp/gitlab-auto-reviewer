@@ -315,6 +315,10 @@ curl http://localhost:3001/healthz
 Should return `"ok": true`, with every scanned repo showing
 `"ok": true` for its GitLab MCP check.
 
+`/healthz` only answers requests made on this machine (`localhost` /
+`127.0.0.1`) — through the public ngrok URL it returns 404, since it
+lists your local repo paths.
+
 ## MUST-check before using this for real
 
 - **Claude Code non-interactive flag**: `src/lib/claudeReview.js` runs

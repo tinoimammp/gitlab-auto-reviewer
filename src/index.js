@@ -379,7 +379,18 @@ async function runStartupCatchup() {
   }
 }
 
+// /healthz lists local repo paths and spawns "claude mcp list" per repo,
+// so it's only served to requests made on this machine. Checking the IP
+// isn't enough — ngrok forwards public requests from 127.0.0.1 too — but
+// those always carry X-Forwarded-For and the ngrok domain as Host.
+function isLocalRequest(req) {
+  const localHosts = ['localhost', '127.0.0.1', '::1', '[::1]'];
+  return !req.headers['x-forwarded-for'] && localHosts.includes(req.hostname);
+}
+
 app.get('/healthz', async (req, res) => {
+  if (!isLocalRequest(req)) return res.status(404).send('Not found');
+
   try {
     const repos = repoResolver.list();
     const entries = await Promise.all(
@@ -397,6 +408,16 @@ app.get('/healthz', async (req, res) => {
     logger.error(`/healthz failed: ${err.message}`);
     res.status(500).json({ ok: false, error: err.message });
   }
+});
+
+// Replaces Express's default error page, which sends the full stack trace
+// (with local file paths) back to whoever sent the request — e.g. anyone
+// posting broken JSON to the public ngrok URL, before the token check.
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  const status = err.status || err.statusCode || 500;
+  logger.warn(`${req.method} ${req.path} → ${status}: ${err.message}`);
+  res.status(status).send(status < 500 ? 'Bad request' : 'Internal error');
 });
 
 // Register/update the webhook on every GitLab project cloned under
