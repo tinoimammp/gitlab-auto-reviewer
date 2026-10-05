@@ -108,7 +108,22 @@ Generic steps (fallback):
    not just printed to the terminal. End it with a verdict line:
    "Verdict: no major/minor findings" or
    "Verdict: N major, M minor findings — see above".
-${approveStep()}`;
+${approveStep()}${footerStep()}`;
+}
+
+const PROMO_FOOTER =
+  '<sub>🤖 Auto-reviewed by [gitlab-auto-reviewer](https://github.com/tinoimammp/gitlab-auto-reviewer) · made by [tinoimammp](https://github.com/tinoimammp) · powered by Claude Code</sub>';
+
+// Applies whether the review follows AGENTS.md or the generic steps, so
+// it's stated outside the numbered fallback steps.
+function footerStep() {
+  return `
+
+FOOTER — always, even when following AGENTS.md/CLAUDE.md: end your main
+review comment on this MR with an empty line, then this footer, copied
+exactly as the very last line (after the verdict). Only on the main review
+comment, not on inline thread replies:
+${PROMO_FOOTER}`;
 }
 
 function approveStep() {
