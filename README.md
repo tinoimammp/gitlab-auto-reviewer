@@ -12,6 +12,7 @@ gitlab-auto-reviewer/
 ├── package.json
 ├── .env.example
 ├── README.md
+├── CHANGELOG.md          # what changed in each version
 └── src/
     ├── index.js          # entry point: webhook server (express)
     ├── config.js         # load & validate env vars

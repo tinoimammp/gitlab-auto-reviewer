@@ -1,4 +1,5 @@
 const express = require('express');
+const { version } = require('../package.json');
 const config = require('./config');
 const logger = require('./lib/logger');
 const { createRepoResolver } = require('./lib/repoResolver');
@@ -450,7 +451,7 @@ async function autoregisterWebhooks(publicUrl) {
 }
 
 app.listen(config.port, async () => {
-  logger.info(`Webhook server running on port ${config.port}`);
+  logger.info(`gitlab-auto-reviewer v${version} — webhook server running on port ${config.port}`);
   logger.info(`Scanning repos in: ${config.reposRoot}`);
 
   const publicUrl = config.enableNgrok ? await startNgrokTunnel(config.port, config.ngrokDomain) : null;
